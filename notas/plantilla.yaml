@@ -1,0 +1,168 @@
+# En YAML, a diferencia de en JSON puedo poner comentarios: ALELUYA !
+# Se ponen con el #
+# Muchas de las características de YAML están inspiradas en Python
+# Dentro de un archivo YAML puedo tener MUCHOS DOCUMENTOS YAML.
+# Cada documento YAML empieza con --- (tres guiones)
+# Los --- son la marca de inicio de un documento YAML.
+# Es obligatorio ponerlos al inicio de cada documento YAML salvo en el primer documento del archivo.
+---
+# Esto es un documento
+---
+# Esto es otro documento
+---
+# Un documento YAML es un NODO. Los documentos YAML tienen estructura jerárquica... como las carpetas del FS.
+# En la estructura de un FS tengo distintos tipos de nodos:
+# - Carpetas (que pueden contener otros nodos)
+# - Archivos (que no pueden contener otros nodos)
+# - Enlaces simbólicos (que apuntan a otros nodos)
+# En YAML tenemos nodos de tipo ESCALAR y de tipo COLECCIÓN
+---
+# NODO ESCALAR: Un nodo que contiene un único valor ~ Más o menos lo mismo que un file system un archivo
+# Nodos numéricos:
+3
+---
+3.34
+---
+-134,123
+---
+# Nodos con valores lógicos (booleanos)
+true # True TRUE
+---
+false # False FALSE
+---
+# Textos (con diferencia lo más complejo que tiene YAML)
+Hola "yo soy un 'texto, 
+que \ntengo \un montón #de palabras
+---
+"Hola \"yo soy un 'texto, 
+que \ntengo \\un montón #de palabras
+
+Adios"
+# La contrabarra solo funciona como carácter de escape entre comillas dobles.
+---
+'Hola "yo soy un ''texto, 
+que \ntengo \un montón #de palabras
+
+Adios'
+# Los saltos dee lineas son reemplazados al leerse por un espacio
+# A no ser... que meta 2 saltos de linea seguidos
+
+# RESUMEN.
+# Vamos a tratar SIEMPRE de usar textos sin comillas. Es la sintaxis recomendada en YAML.
+# Solo cuando necesite (por haber comentarios en medio del texto) poner comillas, las pongo
+# Y solo uso esta sintaxis cuando escriba TEXTOS CON UNA SOLA LINEA.
+
+# Si el texto tiene varias lineas... YAML me ofrece otra sintaxis adicional:
+---
+# Sintaxis literal
+|4-
+      Y ahora empiezo a escribir
+      Y puedo escribir tantas lineas como quiera 
+      Y pueden tener caracteres raros a tutiplén: \" \' #: \n \t \\ etcétera."
+      Y deben estar estas lineas sangradas con respecto al pipe (|) al menos un espacio.
+      
+      A yaml no le importa lo que use como sangría (espacios o tabuladores) en este caso.
+      Si me pide que sea consistente (en cuanto a el uso de espacios o tabuladores y su cantidad)
+      
+      Otra linea
+---
+# Sintaxis folded
+>-
+      docker container create
+              --name mi_contenedor
+              -p 8080:80
+              -v /mis_datos:/var/www/html
+              -e ENV=producción
+              -e DEBUG=false
+              mi_imagen:latest
+  # En esta sintaxis, lo que no son saltos de linea se convierten en espacios
+# Hay más nodos escalares: nulos, fecha, binario... pero no los vamos a ver aquí.
+---
+# NODO COLECCIÓN: Un nodo que contiene otros nodos (como si fuera una carpeta de un FS)
+# Hay varios en YAML... solo os hablo de 2: Listas Ordenadas y los mapas desordenados
+# LISTA ORDENADA: Una colección de nodos ordenados por posición 
+- Item1
+- Item2
+- Item3
+---
+# YAML me obliga a poner al menos 1 espacio en blanco después del guion que indica un item de la lista... pero puedo poner los que quiera
+-    Item1
+- Item2
+-         Item3
+---
+# Puedo mezclar tipos de datos en una lista
+- Item 1
+- 2
+- True
+- - Subitem 1
+  - Subitem 2 # Ojo aquí con los sangrados ANTES del guión... ahí si debo ser consistente
+  -         -         Subitem 3 # Error de sintaxis
+            - Subsubitem 1
+- 
+                              - Otro subitem 1
+                              - Y otro subitem 2 # YAML solo me obliga a que sea consistente con los sangrados dentro del nivel
+                                                 # En otro nivel puedo usar otros sangrados (No lo hago normalmente)
+---
+
+# Hay una sintaxis adicional para listas... DESACONSEJADA:
+[item1, item2,item3] # Solo está por compatibilidad con JSON
+# Por definición, cualquier documento JSON es un documento YAML válido.
+---
+- item 1
+- TRUE
+- 33
+# Eso es un documento válido en YAML
+---
+# En JSON lo escribiría: Este documento, también es válido en YAML:
+[ "item 1", true, 33 ]
+---
+# Solo hay un caso de uso dee esta sintaxis que si es legítimo para su uso por humanos:
+# Listas vacías:
+[] # Esto si lo hacemos
+---
+# MAPA DESORDENADO: Una colección de nodos identificados por una clave (key)
+clave1: valor1
+clave2: valor2
+clave3: valor3
+---
+# Este mapa es identico al anterior... el orden de las claves no importa en los mapas desordenados
+clave2: valor2
+clave1: valor1
+clave3: valor3
+---
+# Aplican las mismas reglas de sangrado y sintaxis que en las listas ordenadas
+
+clave1: valor1
+clave2:         valor2
+clave3:    valor3
+clave4: 
+        subclave2: valorB
+        subclave1: valorA
+clave5: 
+      subclave2: valorB
+      subclave1: 
+              subclave2:      valorB
+              subclave1: valorA
+---
+# Hay una sintaxis adicional para mapas desordenados... DESACONSEJADA:
+{ clave1: valor1, clave2: valor2, clave3: valor3 } # Solo está por compatibilidad con JSON
+---
+
+{ "clave1": "valor1", "clave2": true, "clave3": 33 }  # Ese documento es JSON y YAML válido
+---
+# Solo hay un caso de uso de esta sintaxis que si es legítimo para su uso por humanos:
+{} # Esto si lo hacemos
+---
+# Y Esto es todo el yaml que necesitamos saber para Kubernetes.... y para muchas otras herramientas
+
+---
+
+# YAML nos da esta sintaxis.
+# Cada programa que usa YAML para aceptar datos, define lo que llamamos un ESQUEMA YAML
+# Docker compose es un esquema YAML que acepta eel programa docker
+
+# En esos esquemas definimos el tipo dee nodo que se espera en cada sitio (escalar, lista ordenada, mapa desordenado)
+# En el caso dee los mapas, también se define qué claves son válidas en cada sitio y qué tipo de nodo se espera en cada clave.
+
+# Una cosa es conocer la sintaxis de YAML (lo que hemos visto aquí)
+# Y otra cosa ees conocer el esquema YAML que usa cada programa (docker compose, kubernetes, ansible, etcétera)

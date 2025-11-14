@@ -1,0 +1,32 @@
+# Archivos dee Manifiesto
+kind:         Namespace # El tipo de objeto que declaro/defino
+# Cada tipo de objeto que creo en el cluster es gestionado por una librería.
+# Kubernetes trae sus propias librerías para gestionar los objetos propios de kubernetes.
+# Kubernetes también permite instalar programas (Operadores) que amplían los tipos dee objetos que se pueden crear en el cluster.
+# Esos tipos de objeto que no son nativos de kubernetes, los llamamos CRD (Custom Resource Definition).
+# Y esos CRDs son operados por librerías que se instalan en el cluster (mediante los operadores).
+# Puede ocurrir que instale una librería para darme volúmenes de una cabina EMC. Y en esa librería
+# se define el tipo de objeto Volume
+# Pero puede ocurrir que instale una segunda librería  para darme volúmenes  en una cabina Huawei.
+# Y en esa librería se define también el tipo de objeto Volume.
+# El nombre/version dee la librería que define el objeto que estoy definiendo en el manifiesto, 
+# se indica en la línea apiVersion:
+apiVersion:    v1
+# librería/version         que define/controla el tipo de objeto que estoy creando
+# Kubernetes para sus objetos más básicos, usa la librería "core" en versión 1.
+# En este caso, y solo en este caso, no ponemos el nombre de la librería, solo la versión.
+# Hay objetos dee kubernetes que son gestionados por otras librerías distintas a la core,
+# Aunque también son objetos básicos de kubernetes.
+# core/v1:  namespaces, pods, services, configmaps, secrets, persistentvolumes, persistentvolumeclaims, ...
+# apps/v1: deployments, statefulsets, daemonsets, replicasets, ...
+# networking.k8s.io/v1: ingress, networkpolicies, ...
+# rbac.authorization.k8s.io/v1: roles, rolebindings, clusterroles, clusterrolebindings, ...
+        
+metadata:
+  name:         mi-wordpress # Este name es el que debe ser único para este tipo de objeto dentro del namespace
+
+# Este fichero es el que necesito.
+# Posteriormente le digo a kubernetes:
+# $ kubectl apply -f objetos/0-namespace.yaml
+
+# Y ya kubernetes creará el namespace "mi-wordpress" en el cluster.

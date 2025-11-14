@@ -1,0 +1,450 @@
+
+---
+kind:             PersistentVolume
+apiVersion:       v1
+metadata:
+  name:           volumen2
+spec:
+  capacity:
+      storage:        20Gi
+  storageClassName:   rapidito-redundante
+  accessModes:
+    - ReadWriteOnce
+  nfs:
+    server:   mi-nfs-server.mi-dominio.local
+    path:     /ruta/del/volumen
+---
+kind:             PersistentVolumeClaim
+apiVersion:       v1
+metadata:
+  name:           pvc-datos-wordpress
+spec:
+  resources:
+    requests:
+      storage:    10Gi
+  storageClassName:   rapidito-redundante
+  accessModes:
+    - ReadWriteOnce     
+
+---
+kind:             PersistentVolume
+                  # Es el registro que hago en kubernetes de un volumen que existe por ahí fuera!
+apiVersion:       v1
+
+metadata:
+  name:           volumen1
+
+
+spec:
+
+# Características del volumen
+  capacity:
+      storage:        20Gi
+  storageClassName:   rapidito-redundante
+  accessModes:
+    - ReadWriteOnce
+
+# Datos reales del volumen en el backend
+  nfs:
+    server:   mi-nfs-server.mi-dominio.local
+    path:     /ruta/del/volumen
+
+        #iscsi:
+          # Aquí van los parámetros para conectar con el target iSCSI
+          # Por ejemplo:
+          #targetPortal: mi-iscsi-server.mi-dominio.local:3260
+          #iqn:          iqn.2024-01.com.ejemplo:storage.target1
+          #lun:          0
+          #fsType:       ext4
+          #readOnly:     false
+        
+        #awsElasticBlockStore:
+        #  volumeID:    vol-0abcd1234efgh5678  # ID del volumen EBS
+        #  fsType:      ext4
+---
+#kind:             PersistentVolumeClaim
+#apiVersion:       v1
+
+#metadata:
+#  name:           pvc-datos-mariadb
+
+
+#spec:
+
+#  resources:
+#    requests:
+#      storage:    10Gi
+  # Otras caracteristicas: Velocidad, Encriptación, Nivel de redundancia x3
+#  storageClassName:   rapidito-redundante
+#  accessModes:
+#    - ReadWriteOnce     # Ese volumen solo se va a montar en un nodo... para lectura y escritura
+    #- ReadWriteMany    # Ese volumen se puede montar en varios nodos a la vez... para lectura y escritura
+    #- ReadOnlyMany     # Ese volumen se puede montar en varios nodos a la vez... pero solo para lectura
+    #- ReadWriteOncePod     # Ese volumen solo se va a montar en un nodo para un único pod... para lectura y escritura.
+                        # Salió hace poco.. y aún en muchas cabinas y sistemas no está soportado
+
+  # nfs: Puede ser montado en varias máquinas a la vez? SI. Y puedo desde todas escribir? SI
+  # iscsi: Puede ser montado en varias máquinas a la vez? NO, al menos no para escritura
+
+
+# Wordpress (5 nodos, leyendo y escribiendo en el mismo volumen compartido) -> NFS
+# BBDD MariaDB1 (1 nodo, leyendo y escribiendo en su volumen) -> iSCSI (Más rendimiento)
+---
+
+kind:             ConfigMap
+apiVersion:       v1
+
+metadata:
+  name:           configuracion-filebeat
+
+data:
+  filebeat.yaml: |-
+                    filebeat.inputs:
+                    - type: log
+                      paths: 
+                        - /datos/apache.log
+
+                    output.logstash:
+                        hosts: [ "172.31.0.228:5044" ]
+
+---
+# Ahora bien... De quién es responsabilidad establecer las contraseñas de BBDD en el entorno de prod? 
+# Del desarrollador?  Ni de broma!
+# Otro sysadmin. = DBA... Quien controle el entorno de producción.. que desde luego no debe ser desarrollo.
+kind:             ConfigMap
+apiVersion:       v1
+
+metadata:
+  name:           datos-bbdd
+
+# Se ponen propiedades / Variables: Clave-Valor
+data:
+  usuario-bbdd:             mi_usuario
+  nombre-bbdd:              mi_basededatos
+
+---
+kind:             Secret
+apiVersion:       v1
+
+metadata:
+  name:           datos-bbdd
+
+# Se ponen propiedades / Variables: Clave-Valor
+data:
+  contraseña-root:          bWlfcGFzc3dvcmRfc3VwZXJfc2VndXJh # | base64
+  contraseña-usuario-bbdd:  bWlfcGFzc3dvcmRfc2VndXJh         # | base64
+  # Lo siguientes es que kubernetes me garantiza que estos valores en su BBDD van a estar cifrados.
+  # Y que en ningún momento se van a persistir en disco en texto plano. Ni en logs.. ni en ningún sitio
+
+# Estamos mas tranquilos ahora? NI DE COÑA.. Esto es una RUINA. Base64 solo es una forma de codificar.
+# Cualquiera que tenga acceso al fichero y coja el valor, puede decodificarlo fácilmente.
+# Simplemente está así para que podamos pasar valores con caracteres especiales / binarios sin problemas.
+# No hay protección ninguna.
+
+# Que pasa entonces con los secretos. Es el único tipo de objeto de kubernetes que yo no voy a crear mediante un archivo de manifiesto.
+# Hay un comando específico para crear secretos:
+# Ese comando crea este fichero por mi... en RAM... y lo manda al cluster.
+# No cojo y creo yo este documento en un archivo de texto plano en mi PC y lo guardo en una carpeta y mucho menos lo subo a un repositorio git.
+# $ kubectl create secret generic datos-bbdd     \
+#                   --from-literal=contraseña-root='mi_password_super_segura'  \
+#                   --from-literal=contraseña-usuario-bbdd='mi_password_segura' \
+#                   --namespace=mi-wordpress
+---
+# Quien define un POD?
+# El sysadmin? Ni de broma
+# Desarrollo! ESTE SI
+kind:             StatefulSet
+apiVersion:       apps/v1
+
+metadata:
+  name:           statefulset-mariadb
+  #namespace:      mi-wordpress # Esto se puede hacer. PERO NO SE HACE NUNCA
+  # No lo hacemos porque , esa información tengo otro sitio donde poder darla.. que es más flexible:
+  # $ kubectl apply -f objetos/1-pod.yaml -n mi-wordpress 
+  # Eso me permite, el mismo objeto, aplicarlo a distintos namespaces sin tener que tocar el fichero.
+
+# Para kubernetes un POD es un conjunto de contenedores que deben estar trabajando 24x7
+spec:
+
+   replicas: 1 # Numero inicial de replicas (de pods... que quiero que kubernetes mantenga siempre vivas)
+              # Luego puedo escalar ese número en mi despliegue: $ kubectl scale deployment deployment-mariadb --replicas=3 -n mi-wordpress
+              # Lo guay... con un autoescalado: HorizontalPodAutoscaler
+   selector:
+     matchLabels:
+       app:        mariadb-app
+
+   serviceName:    servicio-mariadb  # Qué hace esto?
+                                     # Crear un "subservicio" para que cada pod tenga su propia IP estable y una entrada DNS
+                                     # Los pods que se van a generar desde esta plantilla tendrán por nombre:
+                                     # statefulset-mariadb-0.servicio-mariadb
+                                     # statefulset-mariadb-1.servicio-mariadb
+                                     # statefulset-mariadb-2.servicio-mariadb
+
+   volumeClaimTemplates:
+      - name:       volumen-datos-bbdd
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage:    10Gi
+          storageClassName:   rapidito-redundante
+        # tipo
+
+        #nfs:
+        #  server:   mi-nfs-server.mi-dominio.local
+        #  path:     /ruta/del/volumen
+
+        #iscsi:
+          # Aquí van los parámetros para conectar con el target iSCSI
+          # Por ejemplo:
+          #targetPortal: mi-iscsi-server.mi-dominio.local:3260
+          #iqn:          iqn.2024-01.com.ejemplo:storage.target1
+          #lun:          0
+          #fsType:       ext4
+          #readOnly:     false
+        
+        #awsElasticBlockStore:
+        #  volumeID:    vol-0abcd1234efgh5678  # ID del volumen EBS
+        #  fsType:      ext4
+
+   template:
+
+      metadata:
+       labels:
+         app:        mariadb-app
+      spec:
+          # reglas de afinidad
+          containers:
+          - name:              mariadb
+            image:             mariadb:10.3 # -> 10.3.4
+            imagePullPolicy:   IfNotPresent # Que solo se descargue la imagen si no la tengo localmente
+                                            # Always: Siempre descargar la imagen
+                                                # ^^^ ESTO tiene que ver con tags VARIABLES en las imágenes.
+                                            # Never: Nunca descargar la imagen (usar solo la local) RARO!
+                                                  # A priori, podríamos pensar que nos conviene entonces siempre usar Always.
+                                                  # El problema es: 
+                                                  # - Tarda más en arrancar aquello
+                                                  # - Cuando descargo de un registry público, puedo tener problemas de rate-limit (límite de descargas)
+            env:
+              - name:       MARIADB_ROOT_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name:   datos-bbdd
+                    key:    contraseña-root
+              - name:       MARIADB_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name:   datos-bbdd
+                    key:    contraseña-usuario-bbdd
+              - name:       MARIADB_USER
+                valueFrom:
+                  configMapKeyRef:
+                    name:   datos-bbdd
+                    key:    usuario
+              - name:       MARIADB_DATABASE
+                valueFrom:
+                  configMapKeyRef:
+                    name:   datos-bbdd
+                    key:    nombre-bbdd
+            ports: # Esto no tiene nada que ver con lo de docker.
+                    # Es pura Documentación... y de hecho opcional!
+              - containerPort: 3306
+                protocol:     TCP
+                name:         puerto-mariadb
+            resources:
+                requests:
+                  memory:   512Mi
+                  cpu:      500m
+                limits:
+                  memory:   1Gi
+                  cpu:      1
+            volumeMounts:
+              - name:      volumen-datos-bbdd
+                mountPath: /var/lib/mysql
+---
+
+kind:             Deployment
+apiVersion:       apps/v1
+
+metadata:
+  name:           deployment-wordpress
+
+spec:
+
+  replicas: 3 # Numero inicial de replicas (de pods... que quiero que kubernetes mantenga siempre vivas)
+              # Luego puedo escalar ese número en mi despliegue: $ kubectl scale deployment deployment-wordpress --replicas=5 -n mi-wordpress
+              # Lo guay... con un autoescalado: HorizontalPodAutoscaler
+  
+  selector:
+    matchLabels:
+      app:        wordpress-app
+  
+  template:
+
+      metadata:
+       labels:
+         app:        wordpress-app
+
+      spec:
+        volumes:
+          - name:       logs-apache
+            emptyDir:   # Reserva un espacio en RAM que podré montar como una carpeta en un FileSystem dentro de los contenedores
+                medium:  "Memory"  # Usa un tmpfs en RAM para este volumen
+          - name:       volumen-configmap
+            configMap:
+              name:    configuracion-filebeat
+          - name:       pvc-datos-wordpress
+            persistentVolumeClaim:
+              claimName:   pvc-datos-wordpress
+        containers:
+        - name:              filebeat
+          image:             docker.elastic.co/beats/filebeat:9.9.2
+          imagePullPolicy:   IfNotPresent 
+          resources:
+              requests:
+                memory:   200Mi
+                cpu:      200m
+              limits:
+                memory:   400Mi
+                cpu:      500m
+          volumeMounts:
+            - name:    logs-apache
+              mountPath: /datos
+            - name:    volumen-configmap
+              mountPath: /usr/share/filebeat/
+              # Qué hace esto?
+              # Lo que hace es dentro de /usr/share/filebeat, montar crear ficheros para cada una de las claves del configmap
+              # El nombre del fichero será el nombre de la clave
+              # El contenido del fichero será el valor de la clave
+              # En nuestro caso careará dos ficheros:
+              # /usr/share/filebeat/usuario-bbdd          -> con el contenido: mi_usuario
+              # /usr/share/filebeat/nombre-bbdd           -> con el contenido: mi_basededatos
+        - name:              wordpress
+          image:             wordpress:latest
+          imagePullPolicy:   IfNotPresent 
+
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 6
+
+          env:
+            - name:       WORDPRESS_DB_HOST
+              value:      servicio-mariadb:3307
+            - name:       WORDPRESS_DB_USER
+              valueFrom:
+                configMapKeyRef:
+                  name:   datos-bbdd
+                  key:    usuario
+            - name:       WORDPRESS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name:   datos-bbdd
+                  key:    contraseña-usuario-bbdd
+            - name:       WORDPRESS_DB_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name:   datos-bbdd
+                  key:    nombre-bbdd
+          ports:
+            - containerPort: 80
+              protocol:      TCP
+              name:          http-del-wordpress
+          resources:
+              requests:
+                memory:   512Mi
+                cpu:      500m
+              limits:
+                memory:   1Gi
+                cpu:      1
+          volumeMounts:
+            - name:    logs-apache
+              mountPath: /var/log/apache2
+            - name:    pvc-datos-wordpress
+              mountPath: /var/www/html
+---
+
+kind:            HorizontalPodAutoscaler
+apiVersion:      autoscaling/v2
+
+metadata:
+  name:          autoescalador-wordpress
+
+spec:
+
+  minReplicas:    3
+  maxReplicas:    10
+
+  scaleTargetRef:
+    kind:       Deployment
+    name:       deployment-wordpress
+    apiVersion: apps/v1
+  
+  metrics:
+  - type:        Resource
+    resource:
+      name:        cpu
+      target:
+        type:      Utilization
+        averageUtilization:  60  # Quiero que el autoescalador mant
+
+---
+
+kind:               Service
+apiVersion:         v1
+metadata:
+  name:             servicio-mariadb # Este nombre es el que se mete en DNS interno de kubernetes
+
+spec:
+  type:            ClusterIP  # Tipo de servicio
+  ports:
+    - port:        3307       # Puerto en la ip de balanceo (la del servicio  )
+      targetPort:  3306     # Puerto en los pods de backend (los mariadb)
+
+  # Quien hay de backend?
+  selector:
+    app:          mariadb-app # Busca todos los pods con esta etiqueta y los añade como backend del servicio (en balanceo)
+
+---
+
+kind:               Service
+apiVersion:         v1
+metadata:
+  name:             servicio-wordpress # Este nombre es el que se mete en DNS interno de
+
+spec:
+  type:            ClusterIP  # Tipo de servicio
+  ports:
+    - port:        80       # Puerto en la ip de balanceo (la del servicio  )
+      targetPort:  80     # Puerto en los pods de backend (los wordpress)
+
+  # Quien hay de backend?
+  selector:
+    app:          wordpress-app # Busca todos los pods con esta etiqueta y los añade como backend del servicio (en balanceo)
+
+---
+
+kind:        Ingress
+apiVersion:  networking.k8s.io/v1
+metadata:
+  name:      ingress-wordpress
+
+spec:
+  rules:
+    - host:   mi-wordpress.ejemplo.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: servicio-wordpress
+                port:
+                  number: 80
+
+                  #http://mi-wordpress.ejemplo.com/admin/wp-login.php  -> Ingress -> Servicio -> Deployment -> Pods (Wordpress) -> Volumen compartido (NFS)
