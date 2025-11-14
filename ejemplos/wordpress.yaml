@@ -1,0 +1,304 @@
+kind:                 PersistentVolumeClaim
+apiVersion:           v1
+metadata:
+  name:               pvc-datos-wordpress
+spec:
+  resources:
+    requests:
+      storage:        1Gi
+  storageClassName:   efs-sc
+  accessModes:
+                    - ReadWriteOnce     
+---
+
+
+---
+# Ahora bien... De quién es responsabilidad establecer las contraseñas de BBDD en el entorno de prod? 
+# Del desarrollador?  Ni de broma!
+# Otro sysadmin. = DBA... Quien controle el entorno de producción.. que desde luego no debe ser desarrollo.
+kind:             ConfigMap
+apiVersion:       v1
+
+metadata:
+  name:           datos-bbdd
+
+# Se ponen propiedades / Variables: Clave-Valor
+data:
+  usuario-bbdd:             mi_usuario
+  nombre-bbdd:              mi_basededatos
+
+---
+kind:             Secret
+apiVersion:       v1
+
+metadata:
+  name:           datos-bbdd
+
+# Se ponen propiedades / Variables: Clave-Valor
+data:
+  contrasena-root:          bWlfcGFzc3dvcmRfc3VwZXJfc2VndXJh # | base64
+  contrasena-usuario-bbdd:  bWlfcGFzc3dvcmRfc2VndXJh         # | base64
+  # Lo siguientes es que kubernetes me garantiza que estos valores en su BBDD van a estar cifrados.
+  # Y que en ningún momento se van a persistir en disco en texto plano. Ni en logs.. ni en ningún sitio
+
+# Estamos mas tranquilos ahora? NI DE COÑA.. Esto es una RUINA. Base64 solo es una forma de codificar.
+# Cualquiera que tenga acceso al fichero y coja el valor, puede decodificarlo fácilmente.
+# Simplemente está así para que podamos pasar valores con caracteres especiales / binarios sin problemas.
+# No hay protección ninguna.
+
+# Que pasa entonces con los secretos. Es el único tipo de objeto de kubernetes que yo no voy a crear mediante un archivo de manifiesto.
+# Hay un comando específico para crear secretos:
+# Ese comando crea este fichero por mi... en RAM... y lo manda al cluster.
+# No cojo y creo yo este documento en un archivo de texto plano en mi PC y lo guardo en una carpeta y mucho menos lo subo a un repositorio git.
+# $ kubectl create secret generic datos-bbdd     \
+#                   --from-literal=contraseña-root='mi_password_super_segura'  \
+#                   --from-literal=contraseña-usuario-bbdd='mi_password_segura' \
+#                   --namespace=mi-wordpress
+---
+
+kind:             StatefulSet
+apiVersion:       apps/v1
+
+metadata:
+  name:           federico
+  #namespace:      mi-wordpress # Esto se puede hacer. PERO NO SE HACE NUNCA
+  # No lo hacemos porque , esa información tengo otro sitio donde poder darla.. que es más flexible:
+  # $ kubectl apply -f objetos/1-pod.yaml -n mi-wordpress 
+  # Eso me permite, el mismo objeto, aplicarlo a distintos namespaces sin tener que tocar el fichero.
+
+# Para kubernetes un POD es un conjunto de contenedores que deben estar trabajando 24x7
+spec:
+
+   replicas: 1 # Numero inicial de replicas (de pods... que quiero que kubernetes mantenga siempre vivas)
+              # Luego puedo escalar ese número en mi despliegue: $ kubectl scale deployment deployment-mariadb --replicas=3 -n mi-wordpress
+              # Lo guay... con un autoescalado: HorizontalPodAutoscaler
+   selector:
+     matchLabels:
+       app:        mariadb-app
+
+   serviceName:    servicio-mariadb  # Qué hace esto?
+                                     # Crear un "subservicio" para que cada pod tenga su propia IP estable y una entrada DNS
+                                     # Los pods que se van a generar desde esta plantilla tendrán por nombre:
+                                     # statefulset-mariadb-0.servicio-mariadb
+                                     # statefulset-mariadb-1.servicio-mariadb
+                                     # statefulset-mariadb-2.servicio-mariadb
+
+   volumeClaimTemplates:
+      - metadata:
+            name:       volumen-datos-bbdd
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage:        1Gi
+          storageClassName:   gp3
+
+   template:
+
+      metadata:
+       labels:
+         app:        mariadb-app
+      spec:
+          # reglas de afinidad
+          containers:
+          - name:              mariadb
+            image:             mariadb:10.3 # -> 10.3.4
+            imagePullPolicy:   IfNotPresent # Que solo se descargue la imagen si no la tengo localmente
+                                            # Always: Siempre descargar la imagen
+                                                # ^^^ ESTO tiene que ver con tags VARIABLES en las imágenes.
+                                            # Never: Nunca descargar la imagen (usar solo la local) RARO!
+                                                  # A priori, podríamos pensar que nos conviene entonces siempre usar Always.
+                                                  # El problema es: 
+                                                  # - Tarda más en arrancar aquello
+                                                  # - Cuando descargo de un registry público, puedo tener problemas de rate-limit (límite de descargas)
+            env:
+              - name:       MARIADB_ROOT_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name:   datos-bbdd
+                    key:    contrasena-root
+              - name:       MARIADB_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name:   datos-bbdd
+                    key:    contrasena-usuario-bbdd
+              - name:       MARIADB_USER
+                valueFrom:
+                  configMapKeyRef:
+                    name:   datos-bbdd
+                    key:    usuario-bbdd
+              - name:       MARIADB_DATABASE
+                valueFrom:
+                  configMapKeyRef:
+                    name:   datos-bbdd
+                    key:    nombre-bbdd
+            ports: # Esto no tiene nada que ver con lo de docker.
+                    # Es pura Documentación... y de hecho opcional!
+              - containerPort: 3306
+                protocol:     TCP
+                name:         puerto-mariadb
+            resources:
+                requests:
+                  memory:   128Mi
+                  cpu:      50m
+                limits:
+                  memory:   1Gi
+                  cpu:      500m
+            volumeMounts:
+              - name:      volumen-datos-bbdd
+                mountPath: /var/lib/mysql
+---
+
+
+kind:               Service
+apiVersion:         v1
+metadata:
+  name:             servicio-mariadb # Este nombre es el que se mete en DNS interno de kubernetes
+
+spec:
+  type:            ClusterIP  # Tipo de servicio
+  ports:
+    - port: 3307       # Puerto en la ip de balanceo (la del servicio  )
+      targetPort:  3306     # Puerto en los pods de backend (los mariadb)
+
+  # Quien hay de backend?
+  selector:
+    app:          mariadb-app # Busca todos los pods con esta etiqueta y los añade como backend del servicio (en balanceo)
+
+---
+
+
+kind:             Deployment
+apiVersion:       apps/v1
+
+metadata:
+  name:           deployment-wordpress
+
+spec:
+
+  replicas: 1 # Numero inicial de replicas (de pods... que quiero que kubernetes mantenga siempre vivas)
+              # Luego puedo escalar ese número en mi despliegue: $ kubectl scale deployment deployment-wordpress --replicas=5 -n mi-wordpress
+              # Lo guay... con un autoescalado: HorizontalPodAutoscaler
+  
+  selector:
+    matchLabels:
+      app:        wordpress-app
+  
+  template:
+
+      metadata:
+       labels:
+         app:        wordpress-app
+
+      spec:
+        volumes:
+          - name:       pvc-datos-wordpress
+            persistentVolumeClaim:
+              claimName:   pvc-datos-wordpress
+        containers:
+        - name:              wordpress
+          image:             bitnami/wordpress:latest
+          imagePullPolicy:   IfNotPresent 
+
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+              scheme: HTTP
+            periodSeconds: 10
+            failureThreshold: 6
+          env:
+            - name:       ALLOW_EMPTY_PASSWORD
+              value:      "yes"
+            - name:       WORDPRESS_DATABASE_HOST
+              value:      servicio-mariadb
+            - name:       WORDPRESS_DATABASE_PORT_NUMBER
+              value:      "3307"
+            - name:       WORDPRESS_DATABASE_USER
+              valueFrom:
+                configMapKeyRef:
+                  name:   datos-bbdd
+                  key:    usuario-bbdd
+            - name:       WORDPRESS_DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name:   datos-bbdd
+                  key:    contrasena-usuario-bbdd
+            - name:       WORDPRESS_DATABASE_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name:   datos-bbdd
+                  key:    nombre-bbdd
+          resources:
+              requests:
+                memory:   512Mi
+                cpu:      500m
+              limits:
+                memory:   1Gi
+                cpu:      1
+          volumeMounts:
+            - name:    pvc-datos-wordpress
+              mountPath: /var/www/html
+---
+
+kind:               Service
+apiVersion:         v1
+metadata:
+  name:             servicio-wordpress # Este nombre es el que se mete en DNS interno de
+
+spec:
+  type:            ClusterIP  # Tipo de servicio
+  ports:
+    - port:        8080       # Puerto en la ip de balanceo (la del servicio  )
+      targetPort:  8080     # Puerto en los pods de backend (los wordpress)
+
+  # Quien hay de backend?
+  selector:
+    app:          wordpress-app # Busca todos los pods con esta etiqueta y los añade como backend del servicio (en balanceo)
+
+---
+
+kind: Route
+apiVersion: route.openshift.io/v1
+metadata:
+  name: mi-ruta
+  namespace: ivancinigt-dev
+spec:
+  host: mi-ruta-ivancinigt-dev.apps.rm3.7wse.p1.openshiftapps.com
+  to:
+    kind: Service
+    name: servicio-wordpress
+    weight: 100
+  port:
+    targetPort: 8080
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
+
+---
+
+kind:            HorizontalPodAutoscaler
+apiVersion:      autoscaling/v2
+
+metadata:
+  name:          autoescalador-wordpress
+
+spec:
+
+  minReplicas:    3
+  maxReplicas:    10
+
+  scaleTargetRef:
+    kind:       Deployment
+    name:       deployment-wordpress
+    apiVersion: apps/v1
+  
+  metrics:
+  - type:        Resource
+    resource:
+      name:        cpu
+      target:
+        type:      Utilization
+        averageUtilization:  60  # Quiero que el autoescalador mant
